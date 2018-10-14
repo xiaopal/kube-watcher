@@ -24,9 +24,13 @@ do_watch(){
     CHECKSUM_HOLDER="$WATCH_CHECKSUM" \
     CHECKSUM_JQ="$WATCH_CHECKSUM_JQ" \
     FINALIZER="$WATCH_FINALIZER" \
+    INITIALIZER="$WATCH_INITIALIZER" \
+    EXEC_INITIALIZE="$WATCH_EXEC_INITIALIZE" \
     EXEC_CREATE="$WATCH_EXEC_CREATE" \
     EXEC_UPDATE="$WATCH_EXEC_UPDATE" \
     EXEC_DELETE="$WATCH_EXEC_DELETE" \
+    WATCH_ONCE="$WATCH_ONCE" \
+    UNWATCH="$WATCH_UNWATCH" \
     WATCH_ALL_NAMESPACES="$WATCH_ALL_NAMESPACES"
 
   while ARG="$1" && shift; do
@@ -61,6 +65,18 @@ do_watch(){
     "--finalizer")
       FINALIZER="$1" && shift || return 1
       ;;
+    "--initializer")
+      INITIALIZER="$1" && shift || return 1
+      ;;
+    "--unwatch")
+      UNWATCH='Y'
+      ;;
+    "--once")
+      WATCH_ONCE='Y'
+      ;;
+    "--exec-initialize")
+      EXEC_INITIALIZE="$1" && shift || return 1
+      ;;
     "--exec-create")
       EXEC_CREATE="$1" && shift || return 1
       ;;
@@ -80,6 +96,7 @@ do_watch(){
     esac
   done
   [ ! -z "$FINALIZER" ] || FINALIZER='xiaopal.github.com/kube-watcher'
+  [ ! -z "$INITIALIZER" ] || INITIALIZER='xiaopal.github.com/kube-watcher'
   [ ! -z "$CHECKSUM_HOLDER" ] || CHECKSUM_HOLDER='kube-watcher.xiaopal.github.com/checksum'
 
   [ ! -z "$WATCH_ALL_NAMESPACES" ] && WATCH_NAMESPACE=""
@@ -87,6 +104,7 @@ do_watch(){
   [ ! -z "$WATCH_KUBECONFIG" ] && export KUBECONFIG="$WATCH_KUBECONFIG"
 
   [ ! -z "$WATCH_RESOURCE" ] && WATCH_ARGS=("${WATCH_ARGS[@]}" "$WATCH_RESOURCE")
+  [ ! -z "$EXEC_INITIALIZE" ] && WATCH_ARGS=( "${WATCH_ARGS[@]}" --include-uninitialized )
 
   handle_all(){
     local TARGET_SEQ=0 TARGET_NAME TARGET_KIND TARGET_APIVERSION TARGET_NAMESPACE TARGET_GROUP TARGET_VERSION TARGET_TYPE TARGET_TYPE_NAME
@@ -119,13 +137,52 @@ do_watch(){
     done
   }
 
+  checksum(){
+    (export CHECKSUM_HOLDER EXEC_CREATE EXEC_UPDATE EXEC_DELETE; jq -Sc '. + {
+        metadata: {
+          labels: (.metadata.labels//{}),
+          annotations: (.metadata.annotations//{}),
+          finalizers: (.metadata.finalizers//[])
+        }
+      } | del(
+        .status,
+        .metadata.namespace,
+        .metadata.uid,
+        .metadata.selfLink,
+        .metadata.resourceVersion,
+        .metadata.creationTimestamp,
+        .metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"],
+        .metadata.annotations[env.CHECKSUM_HOLDER],
+        .metadata.initializers,
+        .metadata.finalizers
+      )'"${CHECKSUM_JQ:+|$CHECKSUM_JQ}" "$TARGET" | md5sum | cut -d' ' -f-1)
+  }
+
   handle_one(){
     jq -se 'length > 0' "$TARGET" >/dev/null || {
       log INFO "$TARGET_TYPE_NAME: destroyed"
       return 0
     }
     local DELETION_TIMESTAMP="$(jq -r '.metadata.deletionTimestamp//empty' "$TARGET")" \
-      FINALIZER_FOUND="$(export FINALIZER; jq -r '.metadata.finalizers[]?|select(. == env.FINALIZER)' "$TARGET")"
+      CHECKSUM_FOUND="$(export CHECKSUM_HOLDER; jq -r '.metadata.annotations[env.CHECKSUM_HOLDER]//empty' "$TARGET")" \
+      FINALIZER_FOUND="$(export FINALIZER; [ ! -z "$FINALIZER" ] && jq -r '.metadata.finalizers[]?|select(. == env.FINALIZER)' "$TARGET")" \
+      INITIALIZER_FOUND="$(export INITIALIZER; [ ! -z "$INITIALIZER" ] && jq -r '.metadata.initializers.pending[]?|select(.name == env.INITIALIZER)|.name' "$TARGET")"
+
+    [ ! -z "$UNWATCH" ] && {
+      local UNWATCH_PATCH
+      [ ! -z "$CHECKSUM_FOUND" ] && UNWATCH_PATCH="$(export CHECKSUM_HOLDER; jq --argjson patch "${UNWATCH_PATCH:-{\}}" '$patch * {
+        metadata: {
+          annotations: { (env.CHECKSUM_HOLDER):"" }
+        }
+      }' "$TARGET")"
+      [ ! -z "$FINALIZER_FOUND" ] && UNWATCH_PATCH="$(export FINALIZER; jq --argjson patch "${UNWATCH_PATCH:-{\}}" '$patch * {
+        metadata: {
+          finalizers: (.metadata.finalizers//[]|map(select(. != env.FINALIZER)))
+        }
+      }' "$TARGET")"
+      [ -z "$UNWATCH_PATCH" ] || kubectl patch -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" --type='merge' -p "$UNWATCH_PATCH" || return 1
+      return 0
+    }
 
     [ ! -z "$DELETION_TIMESTAMP" ] && {
       [ ! -z "$FINALIZER_FOUND" ] || return 0
@@ -141,56 +198,63 @@ do_watch(){
       return 0
     }
 
-    local CHECKSUM="$(export CHECKSUM_HOLDER; jq -Sc '. + {
-        metadata: {
-          labels: (.metadata.labels//{}),
-          annotations: (.metadata.annotations//{}),
-          finalizers: (.metadata.finalizers//[])
-        }
-      } | del(
-        .status,
-        .metadata.namespace,
-        .metadata.uid,
-        .metadata.selfLink,
-        .metadata.resourceVersion,
-        .metadata.creationTimestamp,
-        .metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"],
-        .metadata.annotations[env.CHECKSUM_HOLDER],
-        .metadata.finalizers
-      )'"${CHECKSUM_JQ:+|$CHECKSUM_JQ}" "$TARGET" | md5sum | cut -d' ' -f-1)"
-
-    [ ! -z "$FINALIZER_FOUND" ] || {
-      [ -z "$EXEC_CREATE" ] || bash -c "$EXEC_CREATE" || {
-        log ERR "$TARGET_TYPE_NAME: failed to execute - $EXEC_CREATE"
+    local UPDATE_PATCH
+    [ ! -z "$INITIALIZER_FOUND" ] && {
+      [ -z "$EXEC_INITIALIZE" ] || bash -c "$EXEC_INITIALIZE" || {
+        log ERR "$TARGET_TYPE_NAME: failed to execute - $EXEC_INITIALIZE"
         return 1
       }
-      kubectl patch -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" --type='merge' -p "$(export FINALIZER CHECKSUM_HOLDER CHECKSUM; jq -c '{
+      UPDATE_PATCH="$(export INITIALIZER; jq --argjson patch "${UPDATE_PATCH:-{\}}" '$patch * {
+        metadata: { 
+          initializers: {
+            pending: (.metadata.initializers.pending//[]|map(select(.name != env.INITIALIZER))) 
+          }
+        }
+      }' "$TARGET")"
+    }
+    [ ! -z "$EXEC_UPDATE" ] || [ ! -z "$EXEC_CREATE" ] && {
+      local CHECKSUM_ATTACH
+      if [ -z "$CHECKSUM_FOUND" ]; then
+        [ -z "$EXEC_CREATE" ] || bash -c "$EXEC_CREATE" || {
+          log ERR "$TARGET_TYPE_NAME: failed to execute - $EXEC_CREATE"
+          return 1
+        }
+        CHECKSUM_ATTACH="$(checksum)"
+      elif [ ! -z "$EXEC_UPDATE" ] && local CHECKSUM="$(checksum)" && [ "$CHECKSUM" != "$CHECKSUM_FOUND" ]; then
+        bash -c "$EXEC_UPDATE" || {
+          log ERR "$TARGET_TYPE_NAME: failed to execute - $EXEC_UPDATE"
+          return 1
+        }
+        CHECKSUM_ATTACH="$CHECKSUM"
+      fi
+      [ ! -z "$CHECKSUM_ATTACH" ] && UPDATE_PATCH="$(export CHECKSUM_HOLDER CHECKSUM_ATTACH; jq --argjson patch "${UPDATE_PATCH:-{\}}" '$patch * {
+          metadata: {
+            annotations: { (env.CHECKSUM_HOLDER):env.CHECKSUM_ATTACH }
+          }
+        }' "$TARGET")"
+    }
+    [ ! -z "$EXEC_DELETE" ] && [ -z "$FINALIZER_FOUND" ] && {
+      UPDATE_PATCH="$(export FINALIZER; jq --argjson patch "${UPDATE_PATCH:-{\}}" '$patch * {
         metadata: {
-          annotations: { (env.CHECKSUM_HOLDER):env.CHECKSUM },
           finalizers: (.metadata.finalizers//[]|map(select(. != env.FINALIZER))+[env.FINALIZER]) 
         }
-      }' "$TARGET")" || return 1
-      return 0
+      }' "$TARGET")"
     }
-    [ ! -z "$EXEC_UPDATE" ] && \
-    local CHECKSUM_FOUND="$(export CHECKSUM_HOLDER; jq -r '.metadata.annotations[env.CHECKSUM_HOLDER]//empty' "$TARGET")" && \
-    [ "$CHECKSUM" != "$CHECKSUM_FOUND" ] || return 0
-
-    bash -c "$EXEC_UPDATE" || {
-      log ERR "$TARGET_TYPE_NAME: failed to execute - $EXEC_UPDATE"
-      return 1
-    }
-    kubectl patch -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" --type='merge' -p "$(export CHECKSUM_HOLDER CHECKSUM; jq -c '{
-      metadata: { 
-        annotations: { (env.CHECKSUM_HOLDER):env.CHECKSUM }
-      }
-    }' "$TARGET")" || return 1
+    [ -z "$UPDATE_PATCH" ] || kubectl patch -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" --type='merge' -p "$UPDATE_PATCH" || return 1
   }
 
   ( export WATCH_STAGE="$(mktemp -d)" && trap "log INFO 'exiting...'; rm -rf '$WATCH_STAGE'" EXIT
+    [ ! -z "$WATCH_ONCE" ] || [ ! -z "$UNWATCH" ] && {
+      log INFO "finding resources...${WATCH_ALL_NAMESPACES:+(all namespaces)}"
+      handle_all < <( kubectl get "${WATCH_ARGS[@]}" ) || exit 1
+      exit 0
+    }
     log INFO "watching resources...${WATCH_ALL_NAMESPACES:+(all namespaces)}"
-    handle_all < <(while true; do kubectl get --watch "${WATCH_ARGS[@]}"; done) || exit 1
-  ) || {
+    handle_all < <( while true; do
+        kubectl get --watch "${WATCH_ARGS[@]}"
+        log INFO "restarting watch..."
+      done ) || exit 1
+    ) || {
     log ERR "Failed during watch"
     return 1
   }
