@@ -99,7 +99,7 @@ do_watch(){
     esac
   done
   [ ! -z "$FINALIZER" ] || FINALIZER='xiaopal.github.com/kube-watcher'
-  [ ! -z "$INITIALIZER" ] || INITIALIZER='xiaopal.github.com/kube-watcher'
+  [ ! -z "$INITIALIZER" ] || INITIALIZER='kube-watcher.xiaopal.github.com'
   [ ! -z "$CHECKSUM_HOLDER" ] || CHECKSUM_HOLDER='kube-watcher.xiaopal.github.com/checksum'
 
   [ ! -z "$WATCH_ALL_NAMESPACES" ] && WATCH_NAMESPACE=""
