@@ -127,7 +127,7 @@ do_watch(){
       (( TARGET_SEQ ++ ))
 
       local TARGET="$WATCH_STAGE/CURRENT"
-      kubectl get --ignore-not-found -o json -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" | jq '.' >"$TARGET" && \
+      kubectl get --ignore-not-found -o json -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" --include-uninitialized | jq '.' >"$TARGET" && \
       TARGET="$TARGET" \
       TARGET_TYPE_NAME="$TARGET_TYPE_NAME" \
       TARGET_SEQ="$TARGET_SEQ" \
