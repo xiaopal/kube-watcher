@@ -77,6 +77,9 @@ do_watch(){
     "--exec-initialize")
       EXEC_INITIALIZE="$1" && shift || return 1
       ;;
+    "--initialize")
+      EXEC_INITIALIZE="${EXEC_INITIALIZE:-log INFO 'initializing'}"
+      ;;
     "--exec-create")
       EXEC_CREATE="$1" && shift || return 1
       ;;
