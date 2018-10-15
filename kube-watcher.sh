@@ -29,6 +29,7 @@ do_watch(){
     EXEC_CREATE="$WATCH_EXEC_CREATE" \
     EXEC_UPDATE="$WATCH_EXEC_UPDATE" \
     EXEC_DELETE="$WATCH_EXEC_DELETE" \
+    NOTIFY_DESTROYED="$WATCH_NOTIFY_DESTROYED" \
     WATCH_ONCE="$WATCH_ONCE" \
     UNWATCH="$WATCH_UNWATCH" \
     WATCH_ALL_NAMESPACES="$WATCH_ALL_NAMESPACES"
@@ -88,6 +89,9 @@ do_watch(){
       ;;
     "--exec-delete")
       EXEC_DELETE="$1" && shift || return 1
+      ;;
+    "--notify-destroyed")
+      NOTIFY_DESTROYED="$1" && shift || return 1
       ;;
     "--")
       WATCH_ARGS=("${WATCH_ARGS[@]}" "$@")
@@ -163,7 +167,7 @@ do_watch(){
 
   handle_one(){
     jq -se 'length > 0' "$TARGET" >/dev/null || {
-      log INFO "$TARGET_TYPE_NAME: destroyed"
+      [ -z "$NOTIFY_DESTROYED" ] || bash -c "$NOTIFY_DESTROYED" || log ERR "$TARGET_NAMESPACE.$TARGET_TYPE_NAME: failed to notify - $NOTIFY_DESTROYED"
       return 0
     }
     local DELETION_TIMESTAMP="$(jq -r '.metadata.deletionTimestamp//empty' "$TARGET")" \
@@ -190,7 +194,7 @@ do_watch(){
     [ ! -z "$DELETION_TIMESTAMP" ] && {
       [ ! -z "$FINALIZER_FOUND" ] || return 0
       [ -z "$EXEC_DELETE" ] || bash -c "$EXEC_DELETE" || {
-        log ERR "$TARGET_TYPE_NAME: failed to execute - $EXEC_DELETE"
+        log ERR "$TARGET_NAMESPACE.$TARGET_TYPE_NAME: failed to execute - $EXEC_DELETE"
         return 1
       }
       kubectl patch -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" --type='merge' -p "$(export FINALIZER; jq -c '{
@@ -219,13 +223,13 @@ do_watch(){
       local CHECKSUM_ATTACH
       if [ -z "$CHECKSUM_FOUND" ]; then
         [ -z "$EXEC_CREATE" ] || bash -c "$EXEC_CREATE" || {
-          log ERR "$TARGET_TYPE_NAME: failed to execute - $EXEC_CREATE"
+          log ERR "$TARGET_NAMESPACE.$TARGET_TYPE_NAME: failed to execute - $EXEC_CREATE"
           return 1
         }
         CHECKSUM_ATTACH="$(checksum)"
       elif [ ! -z "$EXEC_UPDATE" ] && local CHECKSUM="$(checksum)" && [ "$CHECKSUM" != "$CHECKSUM_FOUND" ]; then
         bash -c "$EXEC_UPDATE" || {
-          log ERR "$TARGET_TYPE_NAME: failed to execute - $EXEC_UPDATE"
+          log ERR "$TARGET_NAMESPACE.$TARGET_TYPE_NAME: failed to execute - $EXEC_UPDATE"
           return 1
         }
         CHECKSUM_ATTACH="$CHECKSUM"
