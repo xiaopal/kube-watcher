@@ -78,7 +78,7 @@ do_watch(){
       EXEC_INITIALIZE="$1" && shift || return 1
       ;;
     "--initialize")
-      EXEC_INITIALIZE="${EXEC_INITIALIZE:-log INFO 'initializing'}"
+      EXEC_INITIALIZE="${EXEC_INITIALIZE:-echo 'initializing \$TARGET_NAMESPACE.\$TARGET_TYPE_NAME'}"
       ;;
     "--exec-create")
       EXEC_CREATE="$1" && shift || return 1
@@ -127,7 +127,7 @@ do_watch(){
       (( TARGET_SEQ ++ ))
 
       local TARGET="$WATCH_STAGE/CURRENT"
-      kubectl get --ignore-not-found -o json -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" --include-uninitialized | jq '.' >"$TARGET" && \
+      kubectl get --ignore-not-found -o json -n "$TARGET_NAMESPACE" "$TARGET_TYPE_NAME" | jq '.' >"$TARGET" && \
       TARGET="$TARGET" \
       TARGET_TYPE_NAME="$TARGET_TYPE_NAME" \
       TARGET_SEQ="$TARGET_SEQ" \
