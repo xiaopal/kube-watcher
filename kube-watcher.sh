@@ -29,7 +29,7 @@ do_watch(){
     EXEC_CREATE="$WATCH_EXEC_CREATE" \
     EXEC_UPDATE="$WATCH_EXEC_UPDATE" \
     EXEC_DELETE="$WATCH_EXEC_DELETE" \
-    NOTIFY_DESTROYED="$WATCH_NOTIFY_DESTROYED" \
+    NOTIFY_ABSENT="$WATCH_NOTIFY_ABSENT" \
     WATCH_ONCE="$WATCH_ONCE" \
     UNWATCH="$WATCH_UNWATCH" \
     WATCH_ALL_NAMESPACES="$WATCH_ALL_NAMESPACES"
@@ -90,8 +90,8 @@ do_watch(){
     "--exec-delete")
       EXEC_DELETE="$1" && shift || return 1
       ;;
-    "--notify-destroyed")
-      NOTIFY_DESTROYED="$1" && shift || return 1
+    "--notify-absent")
+      NOTIFY_ABSENT="$1" && shift || return 1
       ;;
     "--")
       WATCH_ARGS=("${WATCH_ARGS[@]}" "$@")
@@ -167,7 +167,7 @@ do_watch(){
 
   handle_one(){
     jq -se 'length > 0' "$TARGET" >/dev/null || {
-      [ -z "$NOTIFY_DESTROYED" ] || bash -c "$NOTIFY_DESTROYED" || log ERR "$TARGET_NAMESPACE.$TARGET_TYPE_NAME: failed to notify - $NOTIFY_DESTROYED"
+      [ -z "$NOTIFY_ABSENT" ] || bash -c "$NOTIFY_ABSENT" || log ERR "$TARGET_NAMESPACE.$TARGET_TYPE_NAME: failed to notify absent - $NOTIFY_ABSENT"
       return 0
     }
     local DELETION_TIMESTAMP="$(jq -r '.metadata.deletionTimestamp//empty' "$TARGET")" \
