@@ -111,6 +111,8 @@ do_watch(){
   [ ! -z "$WATCH_KUBECONFIG" ] && export KUBECONFIG="$WATCH_KUBECONFIG"
 
   [ ! -z "$WATCH_RESOURCE" ] && WATCH_ARGS=("${WATCH_ARGS[@]}" "$WATCH_RESOURCE")
+  [ ! -z "$WATCH_RESOURCE_SELECTOR" ] && WATCH_ARGS=("${WATCH_ARGS[@]}" -l "$WATCH_RESOURCE_SELECTOR")
+
   [ ! -z "$EXEC_INITIALIZE" ] && WATCH_ARGS=( "${WATCH_ARGS[@]}" --include-uninitialized )
 
   handle_all(){
